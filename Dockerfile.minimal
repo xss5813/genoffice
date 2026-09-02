@@ -14,7 +14,7 @@ RUN apk add --no-cache \
     && npm install -g pnpm@latest
 
 # Copy dependency files first for better caching
-COPY package.json pnpm-lock.yaml ./
+COPY package.json packages-lock.json ./
 COPY packages/ ./packages/
 
 # Install dependencies
