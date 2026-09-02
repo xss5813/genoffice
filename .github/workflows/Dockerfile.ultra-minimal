@@ -1,0 +1,37 @@
+# Dockerfile.ultra-minimal
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+RUN apk add --no-cache python3 make g++ git
+
+COPY package.json pnpm-lock.yaml ./
+COPY packages/ ./packages/
+
+RUN npm install -g pnpm && \
+    pnpm install --frozen-lockfile --shamefully-hoist
+
+COPY . .
+RUN pnpm build && pnpm prune --prod
+
+# Use distroless-like approach
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    nodejs \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    dumb-init \
+    && rm -rf /var/cache/apk/* \
+    && adduser -S genoffice
+
+COPY --from=builder /build/packages/cli/dist /app
+COPY --from=builder /build/node_modules/.pnpm /app/.pnpm
+
+USER genoffice
+WORKDIR /data
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "node", "/app/index.js"]
+CMD ["--help"]
