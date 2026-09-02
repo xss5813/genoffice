@@ -3,7 +3,7 @@ FROM node:22-alpine AS builder
 WORKDIR /build
 
 RUN apk add --no-cache python3 make g++ git curl bash file \
- && npm install -g yarn --ignore-scripts
+ && corepack enable 2>/dev/null || true
 
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
     ELECTRON_MIRROR=https://registry.npmmirror.com/mirrors/electron/ \
