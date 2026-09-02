@@ -3,7 +3,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /build
 
-RUN apk add --no-cache python3 make g++ git
+RUN apk add --no-cache python3 make g++ git curl bash file
+
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1 \
+    ELECTRON_MIRROR=https://registry.npmmirror.com/mirrors/electron/ \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PUPPETEER_SKIP_DOWNLOAD=1 \
+    NODE_OPTIONS=--max_old_space_size=2048
 
 COPY package.json ./
 COPY yarn.lock* ./
@@ -11,24 +17,24 @@ COPY package-lock.json* ./
 COPY packages/ ./packages/
 
 RUN if [ -f yarn.lock ]; then \
-      corepack enable 2>/dev/null || true; \
-      yarn install --frozen-lockfile || yarn install; \
+      yarn install --frozen-lockfile --ignore-scripts --ignore-engines --network-timeout 600000 || \
+      yarn install --ignore-scripts --ignore-engines --network-timeout 600000; \
     elif [ -f package-lock.json ]; then \
-      npm ci || npm install; \
+      npm ci --ignore-scripts || npm install --ignore-scripts; \
     else \
-      npm install; \
+      npm install --ignore-scripts; \
     fi
 
 COPY . .
 
 RUN if [ -f yarn.lock ]; then \
-      yarn build; \
+      yarn build || npm run build; \
     else \
       npm run build; \
     fi || true
 
 RUN if [ -f yarn.lock ]; then \
-      yarn install --production --ignore-scripts || yarn install --production; \
+      yarn install --production --ignore-scripts --ignore-engines || true; \
     else \
       npm prune --production --omit=dev; \
     fi
@@ -39,7 +45,6 @@ FROM alpine:3.19
 RUN apk add --no-cache \
     nodejs \
     chromium \
-    chromium-swiftshader \
     nss \
     freetype \
     harfbuzz \
@@ -48,7 +53,6 @@ RUN apk add --no-cache \
     xvfb-run \
     dumb-init \
     ca-certificates \
-    && ln -s /usr/bin/chromium-browser /usr/bin/chromium 2>/dev/null || true \
     && rm -rf /var/cache/apk/*
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup \
