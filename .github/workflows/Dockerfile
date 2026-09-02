@@ -1,0 +1,89 @@
+# Dockerfile.minimal
+# Stage 1: Build
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+# Install minimal build tools
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    curl \
+    && npm install -g pnpm@latest
+
+# Copy dependency files first for better caching
+COPY package.json pnpm-lock.yaml ./
+COPY packages/ ./packages/
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile --shamefully-hoist
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN pnpm build
+
+# Prune dev dependencies
+RUN pnpm prune --prod
+
+# Stage 2: Runtime - Use Alpine as base
+FROM alpine:3.19
+
+LABEL maintainer="GenOffice Team" \
+      description="GenOffice - Lightweight Docker Image" \
+      org.opencontainers.image.source="https://github.com/genspark-ai/genoffice"
+
+# Install only essential runtime libraries
+RUN apk add --no-cache \
+    # Chromium for Electron/WebView
+    chromium \
+    # System libraries
+    nss \
+    freetype \
+    harfbuzz \
+    # Fonts (minimal CJK support)
+    font-noto-cjk \
+    # Display server (headless mode)
+    xvfb-run \
+    # Process management
+    dumb-init \
+    # Utilities
+    ca-certificates \
+    && rm -rf /var/cache/apk/* \
+    && ln -s /usr/bin/chromium-browser /usr/bin/chromium
+
+# Create non-root user
+RUN addgroup -S genoffice && \
+    adduser -S genoffice -G genoffice && \
+    mkdir -p /home/genoffice/Documents /home/genoffice/.config && \
+    chown -R genoffice:genoffice /home/genoffice
+
+# Copy only the built artifacts (not node_modules or source)
+COPY --from=builder /build/packages/desktop/dist /opt/genoffice
+COPY --from=builder /build/packages/cli/dist /opt/genoffice-cli
+COPY --from=builder /build/node_modules/.pnpm /opt/genoffice/.pnpm
+
+# Create entrypoint script
+RUN echo '#!/bin/sh\n\
+case "$1" in\n\
+  cli)\n\
+    shift\n\
+    exec node /opt/genoffice-cli/index.js "$@"\n\
+    ;;\n\
+  *)\n\
+    exec xvfb-run -a --server-args="-screen 0 1280x720x24" /opt/genoffice/genoffice --no-sandbox "$@"\n\
+    ;;\n\
+esac' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Clean up unnecessary files
+RUN find /opt -type f \( -name "*.map" -o -name "*.ts" -o -name "*.md" \) -delete && \
+    find /opt -type d -name "test" -o -name "__tests__" | xargs rm -rf
+
+USER genoffice
+WORKDIR /home/genoffice
+
+ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
+CMD []
