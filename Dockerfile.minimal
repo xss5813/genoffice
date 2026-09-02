@@ -1,89 +1,71 @@
 # Dockerfile.minimal
-# Stage 1: Build
 FROM node:20-alpine AS builder
 
 WORKDIR /build
 
-# Install minimal build tools
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    git \
-    curl \
-    && npm install -g pnpm@latest
+RUN apk add --no-cache python3 make g++ git
 
-# Copy dependency files first for better caching
-COPY package.json packages-lock.json ./
+COPY package.json ./
+COPY yarn.lock* ./
+COPY package-lock.json* ./
 COPY packages/ ./packages/
 
-# Install dependencies
-RUN pnpm install --frozen-lockfile --shamefully-hoist
+RUN if [ -f yarn.lock ]; then \
+      corepack enable 2>/dev/null || true; \
+      yarn install --frozen-lockfile || yarn install; \
+    elif [ -f package-lock.json ]; then \
+      npm ci || npm install; \
+    else \
+      npm install; \
+    fi
 
-# Copy source code
 COPY . .
 
-# Build the application
-RUN pnpm build
+RUN if [ -f yarn.lock ]; then \
+      yarn build; \
+    else \
+      npm run build; \
+    fi || true
 
-# Prune dev dependencies
-RUN pnpm prune --prod
+RUN if [ -f yarn.lock ]; then \
+      yarn install --production --ignore-scripts || yarn install --production; \
+    else \
+      npm prune --production --omit=dev; \
+    fi
 
-# Stage 2: Runtime - Use Alpine as base
+
 FROM alpine:3.19
 
-LABEL maintainer="GenOffice Team" \
-      description="GenOffice - Lightweight Docker Image" \
-      org.opencontainers.image.source="https://github.com/genspark-ai/genoffice"
-
-# Install only essential runtime libraries
 RUN apk add --no-cache \
-    # Chromium for Electron/WebView
+    nodejs \
     chromium \
-    # System libraries
+    chromium-swiftshader \
     nss \
     freetype \
     harfbuzz \
-    # Fonts (minimal CJK support)
     font-noto-cjk \
-    # Display server (headless mode)
+    ttf-freefont \
     xvfb-run \
-    # Process management
     dumb-init \
-    # Utilities
     ca-certificates \
-    && rm -rf /var/cache/apk/* \
-    && ln -s /usr/bin/chromium-browser /usr/bin/chromium
+    && ln -s /usr/bin/chromium-browser /usr/bin/chromium 2>/dev/null || true \
+    && rm -rf /var/cache/apk/*
 
-# Create non-root user
-RUN addgroup -S genoffice && \
-    adduser -S genoffice -G genoffice && \
-    mkdir -p /home/genoffice/Documents /home/genoffice/.config && \
-    chown -R genoffice:genoffice /home/genoffice
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup \
+    && mkdir -p /home/appuser/Documents \
+    && chown -R appuser:appgroup /home/appuser
 
-# Copy only the built artifacts (not node_modules or source)
-COPY --from=builder /build/packages/desktop/dist /opt/genoffice
-COPY --from=builder /build/packages/cli/dist /opt/genoffice-cli
-COPY --from=builder /build/node_modules/.pnpm /opt/genoffice/.pnpm
+COPY --from=builder /build/node_modules /build/node_modules
+COPY --from=builder /build/packages /build/packages
+COPY --from=builder /build/package.json /build/package.json
 
-# Create entrypoint script
-RUN echo '#!/bin/sh\n\
-case "$1" in\n\
-  cli)\n\
-    shift\n\
-    exec node /opt/genoffice-cli/index.js "$@"\n\
-    ;;\n\
-  *)\n\
-    exec xvfb-run -a --server-args="-screen 0 1280x720x24" /opt/genoffice/genoffice --no-sandbox "$@"\n\
-    ;;\n\
-esac' > /entrypoint.sh && chmod +x /entrypoint.sh
+ENV NODE_PATH=/build/node_modules \
+    DISPLAY=:99 \
+    CHROME_BIN=/usr/bin/chromium \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Clean up unnecessary files
-RUN find /opt -type f \( -name "*.map" -o -name "*.ts" -o -name "*.md" \) -delete && \
-    find /opt -type d -name "test" -o -name "__tests__" | xargs rm -rf
+USER appuser
+WORKDIR /home/appuser
 
-USER genoffice
-WORKDIR /home/genoffice
-
-ENTRYPOINT ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
-CMD []
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["node", "--version"]
